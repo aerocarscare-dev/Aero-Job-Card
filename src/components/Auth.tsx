@@ -4,8 +4,8 @@
  */
 
 import React, { useState } from 'react';
-import { Shield, Key, Mail, Phone, Wrench, FileText, CheckCircle2, AlertCircle } from 'lucide-react';
-import { AppUser } from '../types';
+import { Shield, Key, Mail, Phone, Wrench, FileText, CheckCircle2, AlertCircle, Database, RefreshCw } from 'lucide-react';
+import { AppUser, JobCard } from '../types';
 import { localDB } from '../utils/db';
 
 interface AuthProps {
@@ -26,6 +26,11 @@ export default function Auth({ onAuthSuccess }: AuthProps) {
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // Supabase Link & Sync Specifics
+  const [linkSupabase, setLinkSupabase] = useState(false);
+  const [syncUrl, setSyncUrl] = useState('');
+  const [syncKey, setSyncKey] = useState('');
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -39,35 +44,200 @@ export default function Auth({ onAuthSuccess }: AuthProps) {
     }
 
     try {
-      const users = localDB.getUsers();
-      // Find matching user (email-based or phone-based)
+      let finalUser: AppUser | null = null;
       const cleanInput = email.trim().toLowerCase();
       const digitsInput = email.replace(/\D/g, '');
 
-      const foundUser = users.find(u => {
-        const cleanEmail = u.email.trim().toLowerCase();
-        const cleanPhone = u.phoneNumber.trim();
-        const digitsPhone = u.phoneNumber.replace(/\D/g, '');
+      if (linkSupabase) {
+        if (!syncUrl || !syncKey) {
+          setError('Please provide both Supabase Project URL and Anon Key.');
+          setLoading(false);
+          return;
+        }
 
-        if (cleanEmail === cleanInput) return true;
-        if (cleanPhone === email.trim()) return true;
-        if (digitsInput && digitsInput.length >= 5 && digitsPhone === digitsInput) return true;
-        return false;
-      });
+        setSuccess('Connecting to Supabase and pulling remote database...');
+        
+        const response = await fetch('/api/sync', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            syncUrl: syncUrl.trim(),
+            syncKey: syncKey.trim(),
+            localUsers: [],
+            unsyncedJobs: [],
+            localLogs: [],
+            deletedJobIds: []
+          })
+        });
 
-      if (!foundUser) {
-        setError('User not found. Check email or phone number or register first.');
-        setLoading(false);
-        return;
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.error || `Supabase connection failed (HTTP ${response.status})`);
+        }
+
+        const result = await response.json();
+        if (!result.success) {
+          throw new Error(result.error || 'Supabase sync failed');
+        }
+
+        const remoteUsers = result.remoteUsers || [];
+        const foundRemoteUser = remoteUsers.find((ru: any) => {
+          const cleanEmail = (ru.email || '').trim().toLowerCase();
+          const cleanPhone = (ru.phone_number || ru.phoneNumber || '').trim();
+          const digitsPhone = cleanPhone.replace(/\D/g, '');
+
+          if (cleanEmail === cleanInput) return true;
+          if (cleanPhone === email.trim()) return true;
+          if (digitsInput && digitsInput.length >= 5 && digitsPhone === digitsInput) return true;
+          return false;
+        });
+
+        const localUsers = localDB.getUsers();
+        const foundLocalUser = localUsers.find(u => {
+          const cleanEmail = u.email.trim().toLowerCase();
+          const cleanPhone = u.phoneNumber.trim();
+          const digitsPhone = u.phoneNumber.replace(/\D/g, '');
+
+          if (cleanEmail === cleanInput) return true;
+          if (cleanPhone === email.trim()) return true;
+          if (digitsInput && digitsInput.length >= 5 && digitsPhone === digitsInput) return true;
+          return false;
+        });
+
+        if (!foundRemoteUser && !foundLocalUser) {
+          throw new Error('User account not found on your Supabase remote DB or locally. Please double check credentials or register first.');
+        }
+
+        if (foundRemoteUser) {
+          finalUser = {
+            id: foundRemoteUser.id,
+            email: foundRemoteUser.email,
+            name: foundRemoteUser.name || 'Owner',
+            phoneNumber: foundRemoteUser.phone_number || foundRemoteUser.phoneNumber || '',
+            garageName: foundRemoteUser.garage_name || foundRemoteUser.garageName || 'Aero Cars',
+            role: foundRemoteUser.role || 'owner',
+            category: foundRemoteUser.category || undefined,
+            logoUrl: foundRemoteUser.logo_url || foundRemoteUser.logoUrl || undefined,
+            bannerUrl: foundRemoteUser.banner_url || foundRemoteUser.bannerUrl || undefined,
+            syncUrl: syncUrl.trim(),
+            syncKey: syncKey.trim(),
+            createdAt: foundRemoteUser.created_at || foundRemoteUser.createdAt || new Date().toISOString()
+          };
+        } else {
+          finalUser = {
+            ...foundLocalUser!,
+            syncUrl: syncUrl.trim(),
+            syncKey: syncKey.trim()
+          };
+        }
+
+        // Save matched user in database
+        localDB.saveUser(finalUser);
+        localDB.setCurrentUser(finalUser);
+
+        // Merge all users
+        const mergedUsersMap = new Map<string, AppUser>();
+        remoteUsers.forEach((ru: any) => {
+          mergedUsersMap.set(ru.email.toLowerCase(), {
+            id: ru.id,
+            email: ru.email,
+            name: ru.name,
+            phoneNumber: ru.phone_number,
+            garageName: ru.garage_name,
+            role: ru.role,
+            category: ru.category || undefined,
+            logoUrl: ru.logo_url || undefined,
+            bannerUrl: ru.banner_url || undefined,
+            createdAt: ru.created_at
+          });
+        });
+        localUsers.forEach((lu) => {
+          const key = lu.email.toLowerCase();
+          if (!mergedUsersMap.has(key)) {
+            mergedUsersMap.set(key, lu);
+          }
+        });
+        // Save current user in list with credentials
+        mergedUsersMap.set(finalUser.email.toLowerCase(), finalUser);
+        localStorage.setItem('aerojobs_users', JSON.stringify(Array.from(mergedUsersMap.values())));
+
+        // Merge all jobs
+        if (Array.isArray(result.remoteJobs)) {
+          const localJobs = localDB.getJobCards();
+          const mergedJobsMap = new Map<string, JobCard>();
+          
+          result.remoteJobs.forEach((rj: any) => {
+            mergedJobsMap.set(rj.id, {
+              id: rj.id,
+              jbNumber: rj.jb_number,
+              vehicleNumber: rj.vehicle_number,
+              name: rj.name,
+              phoneNumber: rj.phone_number,
+              workRows: Array.isArray(rj.work_rows) ? rj.work_rows : [],
+              totalCost: Number(rj.total_cost),
+              smsSent: Boolean(rj.sms_sent),
+              smsText: rj.sms_text || '',
+              status: rj.status || 'Open',
+              vehiclePhoto: rj.vehicle_photo || '',
+              createdBy: rj.created_by || '',
+              createdById: rj.created_by_id || '',
+              synced: true,
+              createdAt: rj.created_at,
+              updatedAt: rj.updated_at
+            });
+          });
+
+          localJobs.forEach((lj) => {
+            const remote = mergedJobsMap.get(lj.id);
+            if (!remote || new Date(lj.updatedAt).getTime() > new Date(remote.updatedAt).getTime()) {
+              mergedJobsMap.set(lj.id, {
+                ...lj,
+                synced: result.pushedIds?.includes(lj.id) || lj.synced
+              });
+            }
+          });
+
+          localStorage.setItem('aerojobs_job_cards', JSON.stringify(Array.from(mergedJobsMap.values())));
+        }
+
+        localDB.addSyncHistory({
+          action: 'Supabase Sync during Login',
+          status: 'Success',
+          details: `Fetched ${result.remoteUsers?.length || 0} remote users and ${result.remoteJobs?.length || 0} remote job cards.`
+        });
+
+        setSuccess('Successfully connected Supabase and synchronized all workshop data!');
+      } else {
+        // Normal Login (without Supabase linking)
+        const users = localDB.getUsers();
+        const foundUser = users.find(u => {
+          const cleanEmail = u.email.trim().toLowerCase();
+          const cleanPhone = u.phoneNumber.trim();
+          const digitsPhone = u.phoneNumber.replace(/\D/g, '');
+
+          if (cleanEmail === cleanInput) return true;
+          if (cleanPhone === email.trim()) return true;
+          if (digitsInput && digitsInput.length >= 5 && digitsPhone === digitsInput) return true;
+          return false;
+        });
+
+        if (!foundUser) {
+          setError('User not found. Check email or phone number or register first.');
+          setLoading(false);
+          return;
+        }
+
+        finalUser = { ...foundUser };
+        localDB.setCurrentUser(finalUser);
+        setSuccess('Logged in offline successfully!');
       }
 
-      // Store in current session
-      const updatedUser = { ...foundUser };
-      localDB.setCurrentUser(updatedUser);
-      setSuccess('Logged in offline successfully!');
-
       setTimeout(() => {
-        onAuthSuccess(updatedUser);
+        if (finalUser) {
+          onAuthSuccess(finalUser);
+        }
       }, 1000);
 
     } catch (err: any) {
@@ -152,7 +322,7 @@ export default function Auth({ onAuthSuccess }: AuthProps) {
           {activeGarageName}
         </h2>
         <p className="mt-1 text-center text-sm text-slate-500 font-medium">
-          Job Card Entry & Real-time Cloud Synchronizer
+          Job Card Entry & Management
         </p>
       </div>
 
@@ -234,6 +404,59 @@ export default function Auth({ onAuthSuccess }: AuthProps) {
                     placeholder="••••••••"
                   />
                 </div>
+              </div>
+
+              {/* Option to Link & Sync Supabase */}
+              <div className="border border-slate-200/60 rounded-xl p-3 bg-slate-50/50 space-y-3 text-left">
+                <div className="flex items-center gap-2">
+                  <input
+                    id="link-supabase-checkbox"
+                    type="checkbox"
+                    checked={linkSupabase}
+                    onChange={(e) => setLinkSupabase(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                  />
+                  <label htmlFor="link-supabase-checkbox" className="text-xs font-bold text-slate-700 uppercase tracking-wider select-none cursor-pointer flex items-center gap-1">
+                    <Database className="h-3.5 w-3.5 text-blue-600 animate-pulse" />
+                    Link & Sync Supabase Database
+                  </label>
+                </div>
+
+                {linkSupabase && (
+                  <div className="space-y-3 pt-1 animate-fade-in">
+                    <div>
+                      <label htmlFor="login-sync-url" className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        Supabase Project URL
+                      </label>
+                      <input
+                        id="login-sync-url"
+                        type="url"
+                        required={linkSupabase}
+                        value={syncUrl}
+                        onChange={(e) => setSyncUrl(e.target.value)}
+                        className="block w-full px-3 py-1.5 border border-slate-300 rounded-lg bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-xs font-mono"
+                        placeholder="https://your-project.supabase.co"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="login-sync-key" className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        Supabase Anon Key
+                      </label>
+                      <input
+                        id="login-sync-key"
+                        type="password"
+                        required={linkSupabase}
+                        value={syncKey}
+                        onChange={(e) => setSyncKey(e.target.value)}
+                        className="block w-full px-3 py-1.5 border border-slate-300 rounded-lg bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-xs font-mono"
+                        placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                      />
+                    </div>
+                    <p className="text-[10px] text-slate-500 italic leading-snug">
+                      💡 Enter your Supabase credentials to automatically download all your workshop's existing job cards and users from the cloud.
+                    </p>
+                  </div>
+                )}
               </div>
 
               <div>

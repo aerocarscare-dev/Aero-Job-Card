@@ -460,8 +460,8 @@ export default function CreateJobCard({ currentUser, editCard, onBack, onSave }:
             </div>
           </div>
 
-          {/* Vehicle Optional Photo Upload */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-3">
+          {/* Vehicle Optional Photo Upload removed */}
+          <div className="hidden">
             <h3 className="text-sm font-semibold text-blue-600 uppercase tracking-wider font-display">
               Vehicle Inspection Photo (Optional)
             </h3>

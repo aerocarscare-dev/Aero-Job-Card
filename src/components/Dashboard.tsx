@@ -370,18 +370,7 @@ export default function Dashboard({ currentUser, onLogout, onNavigate, setEditCa
                         </div>
                       </div>
 
-                      {/* Vehicle Inspection Photo preview if available */}
-                      {card.vehiclePhoto && (
-                        <div className="bg-white p-2 rounded-xl border border-slate-200 shadow-sm">
-                          <span className="text-[9px] font-bold text-slate-400 block uppercase mb-1.5">Inspection Photo</span>
-                          <img 
-                            src={card.vehiclePhoto} 
-                            alt={`Inspection Vehicle ${card.jbNumber}`}
-                            className="max-h-40 w-full object-cover rounded-lg border border-slate-100" 
-                            referrerPolicy="no-referrer"
-                          />
-                        </div>
-                      )}
+
 
                       {/* Work Items List */}
                       <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm space-y-2">
