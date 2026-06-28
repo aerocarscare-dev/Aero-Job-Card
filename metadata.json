@@ -1,0 +1,6 @@
+{
+  "name": "Aero Jobs",
+  "description": "A secure offline-first job card entry application with local database security, JSON backups, Excel/CSV exports, and role-based views for garage owners and staff.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

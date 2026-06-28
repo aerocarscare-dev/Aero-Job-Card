@@ -1,0 +1,27 @@
+{
+  "entities": {
+    "Backup": {
+      "title": "Backup",
+      "description": "User database backup state",
+      "type": "object",
+      "properties": {
+        "fileId": {
+          "type": "string"
+        },
+        "fileName": {
+          "type": "string"
+        },
+        "createdTime": {
+          "type": "string"
+        }
+      },
+      "required": ["fileId", "fileName", "createdTime"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/backups/{backupId}": {
+      "schema": "Backup",
+      "description": "Backup logs for users"
+    }
+  }
+}
